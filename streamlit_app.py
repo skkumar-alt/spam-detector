@@ -58,7 +58,45 @@ html, body, [class*="css"] {
 .subtitle {
     color: #6b6b88;
     font-size: 1rem;
+    margin-bottom: 1.2rem;
+}
+
+.stats-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
     margin-bottom: 2rem;
+}
+
+.stat-card {
+    background: #13131a;
+    border: 1px solid #2a2a3a;
+    border-radius: 12px;
+    padding: 0.75rem 1.2rem;
+    flex: 1;
+    min-width: 130px;
+}
+
+.stat-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #6b6b88;
+    margin-bottom: 4px;
+}
+
+.stat-value {
+    font-family: 'Space Mono', monospace;
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #a78bfa;
+}
+
+.stat-sub {
+    font-size: 0.72rem;
+    color: #6b6b88;
+    margin-top: 2px;
 }
 
 .result-spam {
@@ -110,17 +148,6 @@ html, body, [class*="css"] {
 
 .risky { color: #ff4d6d; font-weight: 600; background: rgba(255,77,109,0.15); padding: 2px 6px; border-radius: 4px; }
 .safe  { color: #c8c8d8; }
-
-.chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 0.5rem 0 1.5rem; }
-.chip {
-    font-size: 0.82rem;
-    background: #13131a;
-    border: 1px solid #2a2a3a;
-    color: #6b6b88;
-    border-radius: 100px;
-    padding: 5px 14px;
-    cursor: pointer;
-}
 
 .stTextArea textarea {
     background: #13131a !important;
@@ -181,18 +208,29 @@ def load_model():
     # Load SMS dataset
     sms = pd.read_csv('SMSSpamCollection', sep='\t', header=None, names=['label', 'message'])
     sms['label'] = sms['label'].str.lower()
+    sms_count = len(sms)
 
-    # Load email dataset  ← FIX: was 'emails.csv', now 'emails_trimmed.csv'
+    # Load email dataset
     email = pd.read_csv('emails_trimmed.csv')
     email = email[['label', 'text']].rename(columns={'text': 'message'})
     email['label'] = email['label'].str.lower()
 
-    spam_sample = email[email['label'] == 'spam'].sample(37500, random_state=42)
-    ham_sample  = email[email['label'] == 'ham'].sample(37500, random_state=42)
-    email = pd.concat([spam_sample, ham_sample], ignore_index=True)
+    # Use however many rows are actually available, balanced between spam/ham
+    spam_df = email[email['label'] == 'spam']
+    ham_df  = email[email['label'] == 'ham']
+    n       = min(len(spam_df), len(ham_df))
 
-    df = pd.concat([sms, email], ignore_index=True).dropna(subset=['message'])
+    spam_sample    = spam_df.sample(n, random_state=42)
+    ham_sample     = ham_df.sample(n, random_state=42)
+    email_balanced = pd.concat([spam_sample, ham_sample], ignore_index=True)
+    email_count    = len(email_balanced)
+
+    df = pd.concat([sms, email_balanced], ignore_index=True).dropna(subset=['message'])
     df = df.sample(frac=1, random_state=42).reset_index(drop=True)
+
+    total       = len(df)
+    spam_total  = int((df['label'] == 'spam').sum())
+    ham_total   = int((df['label'] == 'ham').sum())
 
     # Chunk preprocessing
     chunk_size = 5000
@@ -206,24 +244,69 @@ def load_model():
     X = vectorizer.fit_transform(df['clean'])
     y = (df['label'] == 'spam').astype(int)
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
     model = MultinomialNB()
     model.fit(X_train, y_train)
 
-    feature_names = vectorizer.get_feature_names_out()
-    top_spam_indices = model.feature_log_prob_[1].argsort()[-100:]
-    top_spam_words = set(feature_names[i] for i in top_spam_indices)
+    train_count = X_train.shape[0]
+    test_count  = X_test.shape[0]
 
-    return model, vectorizer, stemmer, stop_words, top_spam_words, len(df)
+    feature_names    = vectorizer.get_feature_names_out()
+    top_spam_indices = model.feature_log_prob_[1].argsort()[-100:]
+    top_spam_words   = set(feature_names[i] for i in top_spam_indices)
+
+    stats = {
+        "total":       total,
+        "spam_total":  spam_total,
+        "ham_total":   ham_total,
+        "sms_count":   sms_count,
+        "email_count": email_count,
+        "train_count": train_count,
+        "test_count":  test_count,
+    }
+
+    return model, vectorizer, stemmer, stop_words, top_spam_words, stats
 
 # ── Header ────────────────────────────────────────────────────────────
-st.markdown('<div class="main-badge">Naive Bayes · TF-IDF · 80,571 messages</div>', unsafe_allow_html=True)
 st.markdown('<div class="main-title">Spam<span>Filter</span></div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitle">Type any message to analyse it in real time</div>', unsafe_allow_html=True)
 
 # ── Load model with spinner ───────────────────────────────────────────
 with st.spinner("Loading model... (first load takes ~60 sec)"):
-    model, vectorizer, stemmer, stop_words, top_spam_words, total = load_model()
+    model, vectorizer, stemmer, stop_words, top_spam_words, stats = load_model()
+
+# ── Training stats cards ──────────────────────────────────────────────
+st.markdown(f"""
+<div class="stats-row">
+    <div class="stat-card">
+        <div class="stat-label">Total Trained On</div>
+        <div class="stat-value">{stats['total']:,}</div>
+        <div class="stat-sub">messages</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Spam Messages</div>
+        <div class="stat-value">{stats['spam_total']:,}</div>
+        <div class="stat-sub">{round(stats['spam_total']/stats['total']*100, 1)}% of dataset</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Ham Messages</div>
+        <div class="stat-value">{stats['ham_total']:,}</div>
+        <div class="stat-sub">{round(stats['ham_total']/stats['total']*100, 1)}% of dataset</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Training Split</div>
+        <div class="stat-value">{stats['train_count']:,}</div>
+        <div class="stat-sub">{stats['test_count']:,} held for testing</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Sources</div>
+        <div class="stat-value">2</div>
+        <div class="stat-sub">SMS · Email</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 # ── Example chips ─────────────────────────────────────────────────────
 examples = [
@@ -262,16 +345,15 @@ def preprocess_input(text):
     return ' '.join(tokens)
 
 if analyse_clicked and message.strip():
-    cleaned = preprocess_input(message)
-    vector = vectorizer.transform([cleaned])
-    prob = float(model.predict_proba(vector)[0][1])
-    label = "SPAM" if prob > 0.5 else "HAM"
+    cleaned  = preprocess_input(message)
+    vector   = vectorizer.transform([cleaned])
+    prob     = float(model.predict_proba(vector)[0][1])
+    label    = "SPAM" if prob > 0.5 else "HAM"
     prob_pct = round(prob * 100, 1)
 
-    # Verdict
-    css_class = "result-spam" if label == "SPAM" else "result-ham"
+    css_class     = "result-spam" if label == "SPAM" else "result-ham"
     verdict_class = "verdict-spam" if label == "SPAM" else "verdict-ham"
-    icon = "🚨" if label == "SPAM" else "✅"
+    icon          = "🚨" if label == "SPAM" else "✅"
 
     st.markdown(f"""
     <div class="{css_class}">
@@ -280,7 +362,6 @@ if analyse_clicked and message.strip():
     </div>
     """, unsafe_allow_html=True)
 
-    # Progress bar
     st.progress(prob)
 
     # Word highlighting
@@ -295,7 +376,10 @@ if analyse_clicked and message.strip():
         else:
             highlighted_html += f'<span class="safe">{word}</span> '
 
-    risky_label = f"· {risky_count} suspicious word{'s' if risky_count != 1 else ''} flagged" if risky_count > 0 else "· no suspicious words"
+    risky_label = (
+        f"· {risky_count} suspicious word{'s' if risky_count != 1 else ''} flagged"
+        if risky_count > 0 else "· no suspicious words"
+    )
     st.markdown(f"**Word analysis** {risky_label}")
     st.markdown(f'<div class="word-box">{highlighted_html}</div>', unsafe_allow_html=True)
 
