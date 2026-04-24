@@ -182,7 +182,7 @@ def load_model():
     sms = pd.read_csv('SMSSpamCollection', sep='\t', header=None, names=['label', 'message'])
     sms['label'] = sms['label'].str.lower()
 
-    # Load email dataset
+    # Load email dataset  ← FIX: was 'emails.csv', now 'emails_trimmed.csv'
     email = pd.read_csv('emails_trimmed.csv')
     email = email[['label', 'text']].rename(columns={'text': 'message'})
     email['label'] = email['label'].str.lower()
